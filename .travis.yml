@@ -1,36 +1,38 @@
 sudo: required
-language: generic
-
 services:
   - docker
-
+env:
+  global:
+    - SHA=$(git rev-parse HEAD)
+    # to make sure that the Google cloud CLI doesn't try to prompt us. 
+    - CLOUDSDK_CORE_DISABLE_PROMPTS=1
 before_install:
-  - docker build -t cygnetops/react-test -f ./client/Dockerfile.dev ./client
+    # it's going to take the encrypted version of the file that's stored on Travis CI server and decrypt it
+  - openssl aes-256-cbc -K $encrypted_0c35eebf403c_key -iv $encrypted_0c35eebf403c_iv -in service-account.json.enc -out service-account.json -d
+    #install google cloud SDK
+  - curl https://sdk.cloud.google.com | bash > /dev/null;
+  - source $HOME/google-cloud-sdk/path.bash.inc
+    #install kubectl inside of travis environment
+  - gcloud components update kubectl
+    # same as IAM of AWS. It tells Google SDK who we are and give access to our project inside google cloud
+  - gcloud auth activate-service-account --key-file service-account.json
+    # which google cloud project to use
+  - gcloud config set project multi-k8s-303603
+    # which zone to use
+  - gcloud config set compute/zone us-central1-c
+    #name of the cluster
+  - gcloud container clusters get-credentials multi-cluster
+    # login to docker 
+  - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+    # build an image to run the test against
+  - docker build -t ashah1519/react-test -f ./client/Dockerfile.dev ./client
 
 script:
-  - docker run -e CI=true cygnetops/react-test npm test
-
-after_success:
-  - docker build -t cygnetops/multi-client-10-14 ./client
-  - docker build -t cygnetops/multi-nginx-10-14 ./nginx
-  - docker build -t cygnetops/multi-server-10-14 ./server
-  - docker build -t cygnetops/multi-worker-10-14 ./worker
-  # Log in to the docker CLI
-  - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_ID" --password-stdin
-  # Take those images and push them to docker hub
-  - docker push cygnetops/multi-client-10-14
-  - docker push cygnetops/multi-nginx-10-14
-  - docker push cygnetops/multi-server-10-14
-  - docker push cygnetops/multi-worker-10-14
+    # run test
+  - docker run -e CI=true ashah1519/react-test npm test -- --coverage
 
 deploy:
-  provider: elasticbeanstalk
-  region: 'us-east-1'
-  app: 'multi-docker'
-  env: 'MultiDocker-env'
-  bucket_name: 'elasticbeanstalk-us-east-1-923445559289'
-  bucket_path: 'docker-multi'
+  provider: script
+  script: bash ./deploy.sh
   on:
     branch: master
-  access_key_id: $AWS_ACCESS_KEY
-  secret_access_key: $AWS_SECRET_KEY
